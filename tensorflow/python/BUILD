@@ -6581,7 +6581,6 @@ tf_py_test(
     size = "small",
     srcs = ["framework/convert_to_constants_test.py"],
     python_version = "PY3",
-    tags = ["no_rocm"],
     deps = [
         "client_testlib",
         "framework_test_lib",

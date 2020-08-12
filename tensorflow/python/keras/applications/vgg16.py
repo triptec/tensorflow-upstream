@@ -15,7 +15,7 @@
 # pylint: disable=invalid-name
 """VGG16 model for Keras.
 
-Reference paper:
+Reference:
   - [Very Deep Convolutional Networks for Large-Scale Image Recognition]
     (https://arxiv.org/abs/1409.1556) (ICLR 2015)
 """
@@ -53,7 +53,7 @@ def VGG16(
     classifier_activation='softmax'):
   """Instantiates the VGG16 model.
 
-  Reference paper:
+  Reference:
   - [Very Deep Convolutional Networks for Large-Scale Image Recognition](
   https://arxiv.org/abs/1409.1556) (ICLR 2015)
 
@@ -237,5 +237,7 @@ def decode_predictions(preds, top=5):
 
 
 preprocess_input.__doc__ = imagenet_utils.PREPROCESS_INPUT_DOC.format(
-    mode='', ret=imagenet_utils.PREPROCESS_INPUT_RET_DOC_CAFFE)
+    mode='',
+    ret=imagenet_utils.PREPROCESS_INPUT_RET_DOC_CAFFE,
+    error=imagenet_utils.PREPROCESS_INPUT_ERROR_DOC)
 decode_predictions.__doc__ = imagenet_utils.decode_predictions.__doc__

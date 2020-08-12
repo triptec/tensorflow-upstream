@@ -86,14 +86,14 @@ tf_python_pybind_extension(
         "//tensorflow/python/profiler:__subpackages__",
     ],
     deps = [
-        ":traceme_context_manager",
+        ":traceme_wrapper",
         "@pybind11",
     ],
 )
 
 cc_library(
-    name = "traceme_context_manager",
-    hdrs = ["traceme_context_manager.h"],
+    name = "traceme_wrapper",
+    hdrs = ["traceme_wrapper.h"],
     features = ["-layering_check"],
     visibility = [
         "//tensorflow/compiler/xla/python:__pkg__",
@@ -118,15 +118,17 @@ tf_python_pybind_extension(
     ],
     deps = [
         "//tensorflow/core:lib",
-        "//tensorflow/core/profiler:profiler_service_proto_cc",
-        "//tensorflow/core/profiler/convert:xplane_to_profile_response",
+        "//tensorflow/core/profiler/convert:op_stats_to_tf_stats",
+        "//tensorflow/core/profiler/convert:xplane_to_op_stats",
         "//tensorflow/core/profiler/convert:xplane_to_trace_events",
         "//tensorflow/core/profiler/lib:profiler_session_headers",
-        "//tensorflow/core/profiler/rpc:profiler_server",
+        "//tensorflow/core/profiler/rpc:profiler_server_headers",
         "//tensorflow/core/profiler/rpc/client:capture_profile",
         "//tensorflow/core/profiler/rpc/client:save_profile",
         "//tensorflow/python:pybind11_status",
+        "@com_github_grpc_grpc//:grpc++_public_hdrs",
         "@com_google_absl//absl/memory",
+        "@com_google_absl//absl/strings",
         "@pybind11",
     ],
 )

@@ -56,9 +56,10 @@ the 100 % MobileNet on various input sizes:
 |  1.0 MobileNet-128  |    64.4 %    |        529        |     4.2     |
 ------------------------------------------------------------------------
 
-Reference paper:
-  - [MobileNets: Efficient Convolutional Neural Networks for
-     Mobile Vision Applications](https://arxiv.org/abs/1704.04861)
+Reference:
+  - [MobileNets: Efficient Convolutional Neural Networks
+     for Mobile Vision Applications](
+      https://arxiv.org/abs/1704.04861)
 """
 from __future__ import absolute_import
 from __future__ import division
@@ -348,15 +349,13 @@ def _conv_block(inputs, filters, alpha, kernel=(3, 3), strides=(1, 1)):
   """
   channel_axis = 1 if backend.image_data_format() == 'channels_first' else -1
   filters = int(filters * alpha)
-  x = layers.ZeroPadding2D(padding=((0, 1), (0, 1)), name='conv1_pad')(inputs)
   x = layers.Conv2D(
       filters,
       kernel,
-      padding='valid',
+      padding='same',
       use_bias=False,
       strides=strides,
-      name='conv1')(
-          x)
+      name='conv1')(inputs)
   x = layers.BatchNormalization(axis=channel_axis, name='conv1_bn')(x)
   return layers.ReLU(6., name='conv1_relu')(x)
 
@@ -451,5 +450,7 @@ def decode_predictions(preds, top=5):
 
 
 preprocess_input.__doc__ = imagenet_utils.PREPROCESS_INPUT_DOC.format(
-    mode='', ret=imagenet_utils.PREPROCESS_INPUT_RET_DOC_TF)
+    mode='',
+    ret=imagenet_utils.PREPROCESS_INPUT_RET_DOC_TF,
+    error=imagenet_utils.PREPROCESS_INPUT_ERROR_DOC)
 decode_predictions.__doc__ = imagenet_utils.decode_predictions.__doc__

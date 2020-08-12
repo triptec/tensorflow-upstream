@@ -169,7 +169,7 @@ class BackendUtilsTest(test.TestCase):
           sess.run(y, feed_dict={x: np.random.random((2, 3))})
 
   def test_learning_phase_name(self):
-    with ops.name_scope('test_scope'):
+    with backend.name_scope('test_scope'):
       # Test that outer name scopes do not affect the learning phase's name.
       lp = backend.symbolic_learning_phase()
     self.assertEqual(lp.name, 'keras_learning_phase:0')
@@ -1762,7 +1762,10 @@ class TestCTC(test.TestCase):
         -3.777835    # output beam 1
     ], np.float32)[np.newaxis, :]
 
-    decode_truth = [np.array([1, 0]), np.array([0, 1, 0])]
+    decode_truth = [
+        np.array([1, 0, -1, -1, -1, -1, -1]),
+        np.array([0, 1, 0, -1, -1, -1, -1])
+    ]
     beam_width = 2
     top_paths = 2
 
@@ -2131,8 +2134,8 @@ class ControlOpsTests(test.TestCase):
     def false_func():
       return y
 
-    with self.assertRaisesRegexp(ValueError,
-                                 'Rank of `condition` should be less than'):
+    with self.assertRaisesRegex(ValueError,
+                                'Rank of `condition` should be less than'):
       backend.switch(backend.equal(x, x), false_func, true_func)
 
 

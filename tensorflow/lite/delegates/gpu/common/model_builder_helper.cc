@@ -19,17 +19,43 @@ limitations under the License.
 
 #include <fp16.h>
 #include "absl/strings/str_cat.h"
+#include "absl/strings/str_join.h"
 #include "tensorflow/lite/builtin_ops.h"
 #include "tensorflow/lite/c/common.h"
 #include "tensorflow/lite/context.h"
 #include "tensorflow/lite/context_util.h"
 #include "tensorflow/lite/delegates/gpu/common/model.h"
+#include "tensorflow/lite/delegates/gpu/common/operations.h"
 #include "tensorflow/lite/delegates/gpu/common/status.h"
 #include "tensorflow/lite/delegates/utils.h"
 #include "tensorflow/lite/kernels/kernel_util.h"
 
 namespace tflite {
 namespace gpu {
+namespace {
+
+// Creates a node that consumes output from the given node. Because output need
+// to stay the same, newly created node will inherit the output from the given
+// node, which will in turn get newly created copy of output. This is necessary
+// to preserve reference consistency if another node was pointing at that
+// output:
+//   node(output)
+// will turn into:
+//   node(copy(output)) <- passthrough_node(output)
+absl::Status NewPassthroughNode(GraphFloat32* graph, Node* node,
+                                const Value* output, Node** passthru_node) {
+  *passthru_node = graph->NewNode();
+  // Make copies for every output in the original node.
+  RETURN_IF_ERROR(graph->SetProducer((*passthru_node)->id, output->id));
+  Value* copy_output = graph->NewValue();
+  RETURN_IF_ERROR(graph->SetProducer(node->id, copy_output->id));
+  RETURN_IF_ERROR(graph->AddConsumer((*passthru_node)->id, copy_output->id));
+  copy_output->tensor = output->tensor;
+  copy_output->tensor.ref = -1;
+  return absl::OkStatus();
+}
+
+}  // namespace
 
 absl::Status GetNodeAndRegistration(TfLiteContext* context, int node_id,
                                     TfLiteNode** tflite_node,
@@ -126,8 +152,10 @@ absl::Status PopulateQuantParams(const TfLiteTensor& tensor,
 int GetNumberOfRuntimeInputsForNode(const TfLiteContext* context,
                                     const TfLiteNode* tflite_node) {
   int number_of_runtime_inputs = 0;
-  for (int i = 0; i < tflite_node->inputs->size; i++) {
-    if (!IsConstantTensor(&context->tensors[tflite_node->inputs->data[i]])) {
+  for (int i = 0; i < NumInputs(tflite_node); i++) {
+    const TfLiteTensor* tensor =
+        GetOptionalInputTensor(context, tflite_node, i);
+    if (tensor != nullptr && !IsConstantTensor(tensor)) {
       number_of_runtime_inputs++;
     }
   }
@@ -136,19 +164,8 @@ int GetNumberOfRuntimeInputsForNode(const TfLiteContext* context,
 
 int GetNumberOfConstInputsForNode(const TfLiteContext* context,
                                   const TfLiteNode* tflite_node) {
-  return tflite_node->inputs->size -
+  return NumInputs(tflite_node) -
          GetNumberOfRuntimeInputsForNode(context, tflite_node);
-}
-
-int GetNumberOfRuntimeOutputsForNode(const TfLiteContext* context,
-                                     const TfLiteNode* tflite_node) {
-  int number_of_runtime_outputs = 0;
-  for (int i = 0; i < tflite_node->outputs->size; i++) {
-    if (!IsConstantTensor(&context->tensors[tflite_node->outputs->data[i]])) {
-      number_of_runtime_outputs++;
-    }
-  }
-  return number_of_runtime_outputs;
 }
 
 absl::Status CheckInputsOutputs(const TfLiteContext* context,
@@ -161,12 +178,11 @@ absl::Status CheckInputsOutputs(const TfLiteContext* context,
         "Expected ", runtime_inputs, " runtime input tensor(s), but node has ",
         runtime_inputs_from_model, " runtime input(s)."));
   }
-  const int runtime_outputs =
-      GetNumberOfRuntimeOutputsForNode(context, tflite_node);
-  if (runtime_outputs != outputs) {
+  const int outputs_from_model = NumOutputs(tflite_node);
+  if (outputs_from_model != outputs) {
     return absl::InternalError(absl::StrCat("Expected ", outputs,
                                             " output tensor(s), but node has ",
-                                            runtime_outputs, " output(s)."));
+                                            outputs_from_model, " output(s)."));
   }
   return absl::OkStatus();
 }
@@ -220,50 +236,70 @@ absl::Status CreateVectorCopyData<float>(const TfLiteTensor& tensor,
   return absl::OkStatus();
 }
 
+const std::string GetDimensionString(const TfLiteIntArray* dimensions) {
+  return absl::StrJoin(TfLiteIntArrayView(dimensions), "x");
+}
+
 absl::Status SetAllDimensions(const TfLiteIntArray* dimensions, Scalar* shape) {
   if (dimensions->size < 0) {
     return absl::InvalidArgumentError("Invalid Scalar dimensions");
   }
   for (int i = 0; i < dimensions->size; ++i) {
     if (dimensions->data[i] != 1) {
-      return absl::InvalidArgumentError(
-          "Dimension can not be reduced to scalar.");
+      return absl::InvalidArgumentError(absl::StrCat(
+          GetDimensionString(dimensions), "  cannot be reduced to scalar."));
     }
   }
   shape->v = 1;
   return absl::OkStatus();
 }
 
-absl::Status SetAllDimensions(const TfLiteIntArray* dimensions, Linear* shape) {
+absl::Status CheckIfLinearConvertible(const TfLiteIntArray* dimensions) {
   if (dimensions->size <= 0) {
     return absl::InvalidArgumentError("Dimension is empty.");
   }
   for (int i = 0; i < dimensions->size - 1; ++i) {
     if (dimensions->data[i] != 1) {
-      return absl::InvalidArgumentError(
-          "Dimension can not be reduced to linear.");
+      return absl::InvalidArgumentError(absl::StrCat(
+          GetDimensionString(dimensions), "  cannot be reduced to linear."));
     }
   }
+  return absl::OkStatus();
+}
+
+absl::Status SetAllDimensions(const TfLiteIntArray* dimensions, Linear* shape) {
+  RETURN_IF_ERROR(CheckIfLinearConvertible(dimensions));
   shape->v = dimensions->data[dimensions->size - 1];
   return absl::OkStatus();
 }
 
 absl::Status SetAllDimensions(const TfLiteIntArray* dimensions, HWC* shape) {
-  if (dimensions->size != 4) {
-    return absl::InvalidArgumentError("Dimensions are not HWC");
+  if (dimensions->size == 3) {
+    shape->h = dimensions->data[0];
+    shape->w = dimensions->data[1];
+    shape->c = dimensions->data[2];
+    return absl::OkStatus();
   }
-  if (dimensions->data[0] != 1) {
-    return absl::UnimplementedError("Batch size is not equal to 1.");
+  if (dimensions->size == 4) {
+    if (dimensions->data[0] != 1) {
+      return absl::UnimplementedError("Batch size is not equal to 1.");
+    }
+    shape->h = dimensions->data[1];
+    shape->w = dimensions->data[2];
+    shape->c = dimensions->data[3];
+    return absl::OkStatus();
   }
-  shape->h = dimensions->data[1];
-  shape->w = dimensions->data[2];
-  shape->c = dimensions->data[3];
-  return absl::OkStatus();
+  return absl::InvalidArgumentError(
+      absl::StrCat("Expected a 3D tensor of shape HxWxC or a 4D tensor of "
+                   "shape 1xHxWxC but got ",
+                   GetDimensionString(dimensions)));
 }
 
 absl::Status SetAllDimensions(const TfLiteIntArray* dimensions, HW* shape) {
   if (dimensions->size != 2) {
-    return absl::InvalidArgumentError("Dimensions are not HW");
+    return absl::InvalidArgumentError(
+        absl::StrCat("Expected a 2D tensor of shape HxW but got ",
+                     GetDimensionString(dimensions)));
   }
   shape->h = dimensions->data[0];
   shape->w = dimensions->data[1];
@@ -273,7 +309,8 @@ absl::Status SetAllDimensions(const TfLiteIntArray* dimensions, HW* shape) {
 absl::Status SetAllDimensions(const TfLiteIntArray* dimensions, OHWI* shape) {
   if (dimensions->size != 4) {
     return absl::InvalidArgumentError(
-        absl::StrCat("Dimensions are not OHWI: ", dimensions->size));
+        absl::StrCat("Expected a 4D tensor of shape OxHxWxI but got ",
+                     GetDimensionString(dimensions)));
   }
   shape->o = dimensions->data[0];
   shape->h = dimensions->data[1];
@@ -284,13 +321,80 @@ absl::Status SetAllDimensions(const TfLiteIntArray* dimensions, OHWI* shape) {
 
 absl::Status SetAllDimensions(const TfLiteIntArray* dimensions, BHWC* shape) {
   if (dimensions->size != 4) {
-    return absl::InvalidArgumentError("Dimensions are not BHWC");
+    return absl::InvalidArgumentError(
+        absl::StrCat("Expected a 4D tensor of shape BxHxWxC but got ",
+                     GetDimensionString(dimensions)));
   }
   shape->b = dimensions->data[0];
   shape->h = dimensions->data[1];
   shape->w = dimensions->data[2];
   shape->c = dimensions->data[3];
   return absl::OkStatus();
+}
+
+absl::Status IsActivationSupported(TfLiteFusedActivation fused_activation) {
+  switch (fused_activation) {
+    case kTfLiteActNone:
+    case kTfLiteActRelu:
+    case kTfLiteActReluN1To1:
+    case kTfLiteActRelu6:
+    case kTfLiteActTanh:
+    case kTfLiteActSigmoid:
+      return absl::OkStatus();
+    case kTfLiteActSignBit:
+      return absl::UnimplementedError(
+          "TfLiteFusedActivation.kTfLiteActSignBit");
+
+      // Do not add default; we want compilation error rather than run-time
+      // error.
+  }
+}
+
+// If there is fused activation present, then there will be another node created
+// that will have identical output as the given node. New operation node will
+// depend on the given node output.
+absl::Status MaybeFuseActivation(TfLiteFusedActivation fused_activation,
+                                 GraphFloat32* graph, Node* node) {
+  const auto outputs = graph->FindOutputs(node->id);
+  if (outputs.size() != 1) {
+    return absl::InternalError("Number of outputs != 1");
+  }
+  switch (fused_activation) {
+    case kTfLiteActNone:
+      // Nothing to do here
+      return absl::OkStatus();
+    case kTfLiteActRelu:
+    case kTfLiteActReluN1To1:
+    case kTfLiteActRelu6: {
+      ReLUAttributes attr;
+      attr.clip = fused_activation == kTfLiteActRelu
+                      ? 0.0f
+                      : (fused_activation == kTfLiteActReluN1To1 ? 1.0f : 6.0f);
+      Node* activation_node;
+      RETURN_IF_ERROR(
+          NewPassthroughNode(graph, node, outputs[0], &activation_node));
+      activation_node->operation.type = ToString(OperationType::RELU);
+      activation_node->operation.attributes = attr;
+      return absl::OkStatus();
+    }
+    case kTfLiteActTanh: {
+      Node* activation_node;
+      RETURN_IF_ERROR(
+          NewPassthroughNode(graph, node, outputs[0], &activation_node));
+      activation_node->operation.type = ToString(OperationType::TANH);
+      return absl::OkStatus();
+    }
+    case kTfLiteActSigmoid: {
+      Node* activation_node;
+      RETURN_IF_ERROR(
+          NewPassthroughNode(graph, node, outputs[0], &activation_node));
+      activation_node->operation.type = ToString(OperationType::SIGMOID);
+      return absl::OkStatus();
+    } break;
+    default:
+      return absl::NotFoundError(
+          absl::StrCat("Unsupported fused activation: ", fused_activation));
+  }
 }
 
 }  // namespace gpu

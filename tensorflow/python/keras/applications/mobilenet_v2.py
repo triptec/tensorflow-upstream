@@ -69,9 +69,9 @@ MACs stands for Multiply Adds
 | [mobilenet_v2_0.35_128] | 20  | 1.66 |          50.8 | 75.0 |
 | [mobilenet_v2_0.35_96]  | 11  | 1.66 |          45.5 | 70.4 |
 
-  Reference paper:
-  - [MobileNetV2: Inverted Residuals and Linear Bottlenecks]
-  (https://arxiv.org/abs/1801.04381) (CVPR 2018)
+  Reference:
+  - [MobileNetV2: Inverted Residuals and Linear Bottlenecks](
+      https://arxiv.org/abs/1801.04381) (CVPR 2018)
 """
 from __future__ import absolute_import
 from __future__ import division
@@ -298,17 +298,13 @@ def MobileNetV2(input_shape=None,
   channel_axis = 1 if backend.image_data_format() == 'channels_first' else -1
 
   first_block_filters = _make_divisible(32 * alpha, 8)
-  x = layers.ZeroPadding2D(
-      padding=imagenet_utils.correct_pad(img_input, 3),
-      name='Conv1_pad')(img_input)
   x = layers.Conv2D(
       first_block_filters,
       kernel_size=3,
       strides=(2, 2),
-      padding='valid',
+      padding='same',
       use_bias=False,
-      name='Conv1')(
-          x)
+      name='Conv1')(img_input)
   x = layers.BatchNormalization(
       axis=channel_axis, epsilon=1e-3, momentum=0.999, name='bn_Conv1')(
           x)
@@ -508,5 +504,7 @@ def decode_predictions(preds, top=5):
 
 
 preprocess_input.__doc__ = imagenet_utils.PREPROCESS_INPUT_DOC.format(
-    mode='', ret=imagenet_utils.PREPROCESS_INPUT_RET_DOC_TF)
+    mode='',
+    ret=imagenet_utils.PREPROCESS_INPUT_RET_DOC_TF,
+    error=imagenet_utils.PREPROCESS_INPUT_ERROR_DOC)
 decode_predictions.__doc__ = imagenet_utils.decode_predictions.__doc__
